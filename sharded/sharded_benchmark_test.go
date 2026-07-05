@@ -7,11 +7,9 @@ import (
 )
 
 func BenchmarkShardedMailbox_Throughput(b *testing.B) {
-	numShards := uint64(runtime.GOMAXPROCS(0))
-	if numShards < 1 {
-		numShards = 1
-	}
+	// Теперь конструктор сам определяет оптимальное количество шардов.
 	q := NewShardedMailbox[int]()
+	defer q.Close()
 
 	numProducers := runtime.GOMAXPROCS(0)
 	numConsumers := runtime.GOMAXPROCS(0)
@@ -19,8 +17,6 @@ func BenchmarkShardedMailbox_Throughput(b *testing.B) {
 	var wg sync.WaitGroup
 	wg.Add(numProducers + numConsumers)
 
-	// b.N - это общее количество операций.
-	// Мы должны убедиться, что количество отправленных и полученных сообщений равно.
 	opsPerProducer := b.N / numProducers
 	if opsPerProducer == 0 {
 		opsPerProducer = 1
@@ -37,9 +33,9 @@ func BenchmarkShardedMailbox_Throughput(b *testing.B) {
 		go func(producerID int) {
 			defer wg.Done()
 			for i := 0; i < opsPerProducer; i++ {
-				err := q.Enqueue(uint64(producerID), i)
-				if err != nil {
-					b.Error(err)
+				if err := q.Enqueue(uint64(producerID), i); err != nil && err != ErrClosed {
+					b.Errorf("Enqueue failed: %v", err)
+					return
 				}
 			}
 		}(p)
@@ -51,8 +47,9 @@ func BenchmarkShardedMailbox_Throughput(b *testing.B) {
 			defer wg.Done()
 			for i := 0; i < opsPerConsumer; i++ {
 				_, err := q.Dequeue(uint64(consumerID))
-				if err != nil {
-					b.Error(err)
+				if err != nil && err != ErrClosed {
+					b.Errorf("Dequeue failed: %v", err)
+					return
 				}
 			}
 		}(c)
@@ -60,6 +57,5 @@ func BenchmarkShardedMailbox_Throughput(b *testing.B) {
 
 	// Ждем, пока все продюсеры и консюмеры не закончат работу.
 	wg.Wait()
-	q.Close()
 
 }
