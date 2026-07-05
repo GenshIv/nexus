@@ -53,15 +53,28 @@ Benchmarks are run on a 64-core `AMD EPYC 7763` server processor.
 
 ### `sharded` (MPMC)
 
-At 4 cores, `ShardedMailbox` is **~7 times faster** than a standard channel. This demonstrates superior performance even at lower concurrency.
+The `ShardedMailbox` demonstrates significant performance gains over a standard Go channel, especially with increased core counts.
+
+**At 4 cores**, `ShardedMailbox` is **~2.4 times faster** than a standard channel.
 
 ```
 goos: linux
 goarch: amd64
 pkg: github.com/GenshIv/nexus/sharded
-cpu: AMD EPYC 7763 64-Core Processor                
-BenchmarkShardedMailbox_MPMC-4    	30498808	        40.03 ns/op
-BenchmarkStandardChannel_MPMC-4   	 4457665	       279.5 ns/op
+cpu: AMD Ryzen 9 7950X3D 16-Core Processor          
+BenchmarkShardedMailbox_Throughput-4    93373442                64.57 ns/op            0 B/op          0 allocs/op
+BenchmarkStandardChannel_MPMC-4         38434584               154.1 ns/op             0 B/op          0 allocs/op
+```
+
+**At 32 cores**, the performance difference becomes even more pronounced, with `ShardedMailbox` being **~10.5 times faster** than a standard channel, highlighting its excellent scalability.
+
+```
+goos: windows
+goarch: amd64
+pkg: github.com/GenshIv/nexus/sharded
+cpu: AMD Ryzen 9 7950X3D 16-Core Processor          
+BenchmarkShardedMailbox_Throughput-32           354208934               16.57 ns/op            0 B/op          0 allocs/op
+BenchmarkStandardChannel_MPMC-32                34359813               174.1 ns/op             0 B/op          0 allocs/op
 ```
 
 ### `spsc` (SPSC)
@@ -119,42 +132,49 @@ package main
 
 import (
 	"fmt"
-	"runtime"
 	"sync"
 
 	"github.com/GenshIv/nexus/sharded"
 )
 
 func main() {
-	// Use a number of shards equal to GOMAXPROCS for best performance.
-	numShards := uint64(runtime.GOMAXPROCS(0))
-	mailbox := sharded.NewShardedMailbox[int](numShards)
+	mailbox := sharded.NewShardedMailbox[int]()
 
 	var wg sync.WaitGroup
 	numMessages := 100
+
 	wg.Add(numMessages * 2)
 
-	// Launch consumers
+	fmt.Printf("Launching %d producer-consumer pairs on %d shards...\n", numMessages, mailbox.ShardCount())
+
 	for i := 0; i < numMessages; i++ {
 		go func(consumerID int) {
 			defer wg.Done()
-			// Dequeue is a blocking call.
-			item := mailbox.Dequeue(uint64(consumerID))
+			item, err := mailbox.Dequeue(uint64(consumerID))
+			if err != nil {
+				fmt.Printf("Consumer %d failed: %v\n", consumerID, err)
+				return
+			}
 			fmt.Printf("Consumer %d received: %d\n", consumerID, item)
 		}(i)
 	}
 
-	// Launch producers
 	for i := 0; i < numMessages; i++ {
 		go func(producerID int) {
 			defer wg.Done()
 			item := 1000 + producerID
-			// Enqueue is a blocking call.
-			mailbox.Enqueue(uint64(producerID), item)
+			err := mailbox.Enqueue(uint64(producerID), item)
+			if err != nil {
+				fmt.Printf("Producer %d failed: %v\n", producerID, err)
+				return
+			}
+			fmt.Printf("Producer %d sent: %d\n", producerID, item)
 		}(i)
 	}
 
 	wg.Wait()
+	fmt.Println("\nAll messages have been successfully exchanged.")
+	mailbox.Close()
 }
 ```
 
