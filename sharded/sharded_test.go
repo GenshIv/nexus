@@ -7,11 +7,11 @@ import (
 
 // BenchmarkStandardChannel_MPMC benchmarks the standard buffered Go channel in an MPMC scenario.
 func BenchmarkStandardChannel_MPMC(b *testing.B) {
-	channelCapacity := uint64(1024 * 4)
-	ch := make(chan int, channelCapacity)
+	// channelCapacity := uint64(1024 * 4)
+	ch := make(chan int)
 
-	numProducers := 4
-	numConsumers := 8
+	numProducers := 32
+	numConsumers := 32
 
 	b.ResetTimer()
 	b.SetParallelism(numProducers)

@@ -1,131 +1,66 @@
-# Nexus: High-Performance Go Queues
+# Nexus: High-Performance Go Concurrency Primitives
 
-Nexus is a Go project providing high-performance, lock-free queue implementations for various concurrency patterns. It is designed for systems requiring extremely fast context delivery, such as low-level database operations (interacting with the core or drivers), lightweight communication between goroutines, and efficient sharding.
-
-### Core Advantages
-*   **Blazing Fast**: Operates significantly faster than standard Go channels.
-*   **Zero Allocations**: Designed to avoid memory allocations in hot paths for predictable performance and reduced garbage collector pressure.
-*   **Intelligent Load Balancing**: The `sharded` queue includes a smart internal balancer for efficient work distribution.
-*   **Fine-Grained Tuning**: Performance can be finely tuned for specific loads, as demonstrated in the benchmarks.
+Nexus is a Go project providing high-performance, lock-free concurrency primitives designed for systems requiring extremely fast, low-level message passing.
 
 It currently includes:
 
-*   **`spsc`**: A Single Producer Single Consumer (SPSC) queue optimized for speed and efficiency.
-*   **`sharded`**: A Sharded Multiple Producer Multiple Consumer (MPMC) queue designed for high throughput in concurrent environments.
+*   **`spsc`**: A Single Producer Single Consumer (SPSC) queue.
+*   **`sharded`**: A **Sharded Mailbox** for highly scalable, lock-free MPMC (Multiple Producer Multiple Consumer) message exchange.
+
+## Core Philosophy
+
+The primitives in this project are built for speed and scalability by adhering to core principles of mechanical sympathy:
+
+*   **Lock-Free**: All structures rely on atomic operations instead of slower, mutex-based locks.
+*   **Contention-Free Design**: The `sharded` mailbox uses a fully decentralized architecture, eliminating central bottlenecks and ensuring performance scales with the number of cores.
+*   **Cache-Friendly**: Data structures are padded to prevent false sharing between CPU cores.
 
 ## Performance
 
 Benchmarks are run on an `AMD Ryzen 9 7950X3D 16-Core Processor`.
 
-### `spsc` (Single Producer, Single Consumer)
+### `sharded` (Sharded Mailbox vs. Standard Channel)
 
-The `spsc` queue is approximately **10 times faster** than a standard buffered channel for SPSC workloads.
+The `ShardedMailbox` demonstrates excellent performance and scalability, outperforming a standard **unbuffered** Go channel (the closest ideological equivalent) by a significant margin.
 
-```
-$env:GOMAXPROCS=8; go test -bench="." -benchmem -benchtime=5s ./spsc/
-goos: windows
-goarch: amd64
-pkg: github.com/GenshIv/nexus/spsc
-cpu: AMD Ryzen 9 7950X3D 16-Core Processor          
-BenchmarkSPSCQueue_Separate-8           1000000000               2.530 ns/op           0 B/op          0 allocs/op
-BenchmarkStdChannel_Separate-8          218232487               27.53 ns/op            0 B/op          0 allocs/op
-```
+#### High Concurrency (32 CPU Cores)
 
-### `sharded` (Multiple Producer, Multiple Consumer)
-
-The `sharded` queue is approximately **7.8 times faster** than a standard buffered channel for MPMC workloads.
+At 32 cores, `ShardedMailbox` is **~19.3 times faster** than a standard channel, showcasing its superior scalability.
 
 ```
-$env:GOMAXPROCS=8; go test -bench="." -benchmem -benchtime=5s ./sharded/
+$env:GOMAXPROCS=32; go test -bench="." -benchmem -benchtime=5s ./sharded/
 goos: windows
 goarch: amd64
 pkg: github.com/GenshIv/nexus/sharded
 cpu: AMD Ryzen 9 7950X3D 16-Core Processor          
-BenchmarkShardedQueue_MPMC-8            1000000000               4.866 ns/op           0 B/op          0 allocs/op
-BenchmarkStandardChannel_MPMC-8         159876902               38.09 ns/op            0 B/op          0 allocs/op
-```
-**Note on `sharded` performance**: On modern CPUs with heterogeneous cores (like performance-cores and efficiency-cores), the results for the sharded queue may vary. The benchmark shows optimal results when goroutines are scheduled on high-performance cores. If scheduled on less performant cores, the results may be lower, depending on the core's speed.
-
-## `spsc` Package: Single Producer Single Consumer Queue
-
-The `spsc` package offers a highly optimized, lock-free SPSC queue implementation. It uses a ring buffer and atomic operations, with batching for improved performance.
-
-### Features
-*   **Lock-Free**: Achieves concurrency without mutexes, relying on atomic operations.
-*   **High Performance**: Optimized for single producer, single consumer scenarios.
-*   **Batching**: Uses internal batching to reduce the overhead of atomic updates.
-*   **Blocking**: `Enqueue` and `Dequeue` calls will block (wait) if the queue is full or empty, respectively.
-
-### Usage Example
-
-```go
-package main
-
-import (
-	"fmt"
-	"sync"
-	"time"
-
-	"github.com/GenshIv/nexus/spsc"
-)
-
-func main() {
-	capacity := uint64(4) // Must be a power of 2
-	q := spsc.NewSPSCQueue(capacity)
-
-	var wg sync.WaitGroup
-	wg.Add(2) // One for producer, one for consumer
-
-	// Producer Goroutine
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 10; i++ {
-			item := fmt.Sprintf("item-%d", i)
-			
-			// This call will block if the queue is full, and wait for the consumer.
-			// It only returns 'false' if the queue has been closed.
-			if !q.Enqueue(item) {
-				fmt.Println("Queue was closed, stopping producer.")
-				break
-			}
-			fmt.Printf("Produced: %s\n", item)
-		}
-		// Close the queue only after the producer has finished sending all items.
-		q.Close() 
-	}()
-
-	// Consumer Goroutine
-	go func() {
-		defer wg.Done()
-		// Add a small delay to demonstrate the producer blocking when the queue is full.
-		time.Sleep(10 * time.Millisecond) 
-		for {
-			// This call will block if the queue is empty, and wait for the producer.
-			// It returns 'false' only when the queue is closed AND empty.
-			if item, ok := q.Dequeue(); ok {
-				fmt.Printf("Consumed: %v\n", item)
-				time.Sleep(5 * time.Millisecond) // Simulate work
-			} else {
-				// Queue is closed and empty, so we exit.
-				break
-			}
-		}
-	}()
-
-	wg.Wait() // Wait for both producer and consumer to finish
-	fmt.Println("SPSC Example Finished")
-}
+BenchmarkShardedMailbox_MPMC-32         667756815                9.007 ns/op           0 B/op          0 allocs/op
+BenchmarkStandardChannel_MPMC-32        33362506               173.8 ns/op             0 B/op          0 allocs/op
 ```
 
-## `sharded` Package: Sharded Multiple Producer Multiple Consumer Queue
+#### Low Concurrency (2 CPU Cores)
 
-The `sharded` package provides a lock-free MPMC queue implementation that uses sharding to scale performance.
+Even at low concurrency, `ShardedMailbox` maintains a performance advantage.
+
+```
+$env:GOMAXPROCS=2; go test -bench="." -benchmem -benchtime=5s ./sharded/ 
+goos: windows
+goarch: amd64
+pkg: github.com/GenshIv/nexus/sharded
+cpu: AMD Ryzen 9 7950X3D 16-Core Processor          
+BenchmarkShardedMailbox_MPMC-2          286453402               21.56 ns/op            0 B/op          0 allocs/op
+BenchmarkStandardChannel_MPMC-2         203034567               29.75 ns/op            0 B/op          0 allocs/op
+```
+
+## `sharded` Package: Sharded Mailbox
+
+The `sharded` package provides a `ShardedMailbox` structure. This is not a traditional queue but a series of single-element mailboxes ("shards") that allow for a highly concurrent, lock-free exchange of messages.
+
+The core principle is **"producer locks and sends, consumer receives and unlocks."**
 
 ### Features
-*   **Lock-Free MPMC**: Designed for high concurrency without traditional locks.
-*   **Sharding**: Distributes load across multiple internal queues (shards) to reduce contention.
-*   **Non-Blocking**: `Enqueue` and `Dequeue` are non-blocking and return immediately.
-*   **Generic**: Supports any type `T`.
+*   **Fully Decentralized**: Each producer and consumer operates based on its own ID, eliminating central bottlenecks.
+*   **Scalable**: Performance increases with the number of available CPU cores.
+*   **Blocking API**: `Enqueue` and `Dequeue` calls block until a corresponding slot is found, simplifying user code.
 
 ### Usage Example
 
@@ -141,94 +76,46 @@ import (
 )
 
 func main() {
-	numShards := uint64(2) // Must be a power of 2
-	shardCapacity := uint64(4)
-	q := sharded.NewShardedQueue[int](numShards, shardCapacity)
+	// Use a number of shards equal to the number of CPUs for best performance.
+	numShards := uint64(runtime.GOMAXPROCS(0))
+	mailbox := sharded.NewShardedMailbox[int](numShards)
 
 	var wg sync.WaitGroup
-	wg.Add(2) // One for producer, one for consumer
+	numMessages := 100
 
-	// Producer Goroutine
-	go func() {
-		defer wg.Done()
-		producerID := uint64(0) // Example producer ID
-		for i := 0; i < 10; i++ {
-			item := i + 100
-			// This call is non-blocking. It returns 'false' if all shards are full.
-			if !q.Enqueue(producerID, item) {
-				fmt.Printf("Sharded queue is full, dropping item: %d\n", item)
-				// In a real app, you might retry, use a backoff strategy, or drop the item.
-				runtime.Gosched() // Yield to consumer
-			} else {
-				fmt.Printf("Produced: %d\n", item)
-			}
-		}
-		q.Close() // Signal that no more items will be enqueued
-	}()
+	wg.Add(numMessages * 2)
 
-	// Consumer Goroutine
-	go func() {
-		defer wg.Done()
-		for {
-			// This call is non-blocking. It returns 'false' if the queue is empty.
-			if item, ok := q.Dequeue(); ok {
-				fmt.Printf("Consumed: %d\n", item)
-			} else if q.IsClosed() {
-				// If the queue is closed and we confirmed it's empty, we can exit.
-				break
-			} else {
-				// Queue is not closed but is temporarily empty. Yield to other goroutines.
-				runtime.Gosched()
-			}
-		}
-	}()
+	// Launch consumers
+	for i := 0; i < numMessages; i++ {
+		go func(consumerID int) {
+			defer wg.Done()
+			item := mailbox.Dequeue(uint64(consumerID))
+			fmt.Printf("Consumer %d received: %d\n", consumerID, item)
+		}(i)
+	}
 
-	wg.Wait() // Wait for both producer and consumer to finish
-	fmt.Println("Sharded MPMC Example Finished")
+	// Launch producers
+	for i := 0; i < numMessages; i++ {
+		go func(producerID int) {
+			defer wg.Done()
+			item := 1000 + producerID
+			mailbox.Enqueue(uint64(producerID), item)
+		}(i)
+	}
+
+	wg.Wait()
+	fmt.Println("All messages exchanged.")
 }
 ```
 
-### Installation
+## Installation
 
-This project uses Go modules. To use it in your own Go project:
-
-1.  Make sure you have Go 1.18+ installed.
-2.  Initialize your module if you haven't already:
-    ```bash
-    go mod init your_module_name
-    ```
-3.  Add Nexus as a dependency:
-    ```bash
-    go get github.com/GenshIv/nexus
-    ```
-4.  Import the packages:
-    ```go
-    import (
-        "github.com/GenshIv/nexus/spsc"
-        "github.com/GenshIv/nexus/sharded"
-    )
-    ```
-
-### Running Benchmarks
-
-To run the benchmarks for the `spsc` package:
 ```bash
-go test -bench=. -cpu=1 -run=^# -benchtime=1s ./spsc
+go get github.com/GenshIv/nexus
 ```
 
-To run the benchmarks for the `sharded` package:
-```bash
-go test -bench=. -cpu=4 -run=^# -benchtime=1s ./sharded
-```
-
-Adjust `-cpu` to match the number of cores you want to test with.
-
-## Author Igor Ivanuto
-
-## Contributing
-
-Feel free to open issues or pull requests if you have suggestions or improvements.
+## Author
+Igor Ivanuto
 
 ## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.
