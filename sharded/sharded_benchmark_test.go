@@ -15,7 +15,7 @@ func runtime_procUnpin()
 // BenchmarkShardedQueue_MPMC measures the performance of ShardedQueue
 // with multiple producers and multiple consumers.
 func BenchmarkShardedQueue_MPMC(b *testing.B) {
-	numShards := uint64(4)
+	numShards := uint64(2) // Must be a power of 2 (for 4 cpu)
 	shardCapacity := uint64(1024)
 	q := NewShardedQueue[int](numShards, shardCapacity)
 
