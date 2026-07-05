@@ -67,8 +67,8 @@ func (mb *ShardedMailbox[T]) Enqueue(producerID uint64, item T) {
 func (mb *ShardedMailbox[T]) Dequeue(consumerID uint64) T {
 	homeShardIndex := consumerID & mb.mask
 	for {
-		// Сначала ищем у себя, потом у других.
-		for i := uint64(0); i < uint64(len(mb.shards)); i++ {
+		// Симметричное "казино": ищем полный слот, начиная с соседа.
+		for i := uint64(1); i <= uint64(len(mb.shards)); i++ {
 			if item, ok := mb.TryReceive((homeShardIndex + i) & mb.mask); ok {
 				return item
 			}

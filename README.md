@@ -94,7 +94,7 @@ This is the "native" environment for such structures.
 
 ### 4. Network Proxies and API Gateways
 *   **Application**: Transferring packets between a network reading thread and a processing thread (e.g., for filtering HTTP headers or TLS termination).
-*   **Why**: API gateways (like Envoy or custom Go solutions) handle tens of thousands of requests per second. At these speeds, standard channels become a bottleneck. This module allows building lock-free pipelines that can handle immense load on a single node.
+*   **Why**: API gateways (like Envoy or custom Go solutions) handle tens of thousands of requests in a second. At these speeds, standard channels become a bottleneck. This module allows building lock-free pipelines that can handle immense load on a single node.
 
 ### 5. AI/ML Inference Pipelines
 *   **Application**: Transferring frames or tensors between a capture stream (e.g., from a camera or video stream) and a model inference stream (TensorRT/ONNX).

@@ -2,28 +2,56 @@ package sharded
 
 import (
 	"runtime"
-	"sync/atomic"
+	"sync"
 	"testing"
 )
 
-func BenchmarkShardedMailbox_MPMC(b *testing.B) {
+func BenchmarkShardedMailbox_Throughput(b *testing.B) {
 	numShards := uint64(runtime.GOMAXPROCS(0))
 	if numShards < 1 {
 		numShards = 1
 	}
 	q := NewShardedMailbox[int](numShards)
 
-	var idCounter uint64
+	numProducers := runtime.GOMAXPROCS(0)
+	numConsumers := runtime.GOMAXPROCS(0)
+
+	var wg sync.WaitGroup
+	wg.Add(numProducers + numConsumers)
+
+	// b.N - это общее количество операций.
+	// Мы должны убедиться, что количество отправленных и полученных сообщений равно.
+	opsPerProducer := b.N / numProducers
+	if opsPerProducer == 0 {
+		opsPerProducer = 1
+	}
+	opsPerConsumer := b.N / numConsumers
+	if opsPerConsumer == 0 {
+		opsPerConsumer = 1
+	}
 
 	b.ResetTimer()
 
-	b.RunParallel(func(pb *testing.PB) {
-		id := atomic.AddUint64(&idCounter, 1)
-		for pb.Next() {
-			// Каждая горутина выполняет полный цикл "запрос-ответ",
-			// используя свой собственный ID для маршрутизации.
-			q.Enqueue(id, 1)
-			_ = q.Dequeue(id)
-		}
-	})
+	// --- Продюсеры ---
+	for p := 0; p < numProducers; p++ {
+		go func(producerID int) {
+			defer wg.Done()
+			for i := 0; i < opsPerProducer; i++ {
+				q.Enqueue(uint64(producerID), i)
+			}
+		}(p)
+	}
+
+	// --- Консюмеры ---
+	for c := 0; c < numConsumers; c++ {
+		go func(consumerID int) {
+			defer wg.Done()
+			for i := 0; i < opsPerConsumer; i++ {
+				_ = q.Dequeue(uint64(consumerID))
+			}
+		}(c)
+	}
+
+	// Ждем, пока все продюсеры и консюмеры не закончат работу.
+	wg.Wait()
 }
