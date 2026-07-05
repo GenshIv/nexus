@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"runtime"
 	"sync"
 
 	"github.com/GenshIv/nexus/sharded"
@@ -10,7 +9,7 @@ import (
 
 func main() {
 	// Создаем ShardedMailbox. Если 0, количество шардов будет определено автоматически.
-	mailbox := sharded.NewShardedMailbox[int](0)
+	mailbox := sharded.NewShardedMailbox[int]()
 
 	var wg sync.WaitGroup
 	numMessages := 100

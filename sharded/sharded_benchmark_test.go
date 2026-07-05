@@ -11,7 +11,7 @@ func BenchmarkShardedMailbox_Throughput(b *testing.B) {
 	if numShards < 1 {
 		numShards = 1
 	}
-	q := NewShardedMailbox[int](numShards)
+	q := NewShardedMailbox[int]()
 
 	numProducers := runtime.GOMAXPROCS(0)
 	numConsumers := runtime.GOMAXPROCS(0)
@@ -37,7 +37,10 @@ func BenchmarkShardedMailbox_Throughput(b *testing.B) {
 		go func(producerID int) {
 			defer wg.Done()
 			for i := 0; i < opsPerProducer; i++ {
-				q.Enqueue(uint64(producerID), i)
+				err := q.Enqueue(uint64(producerID), i)
+				if err != nil {
+					b.Error(err)
+				}
 			}
 		}(p)
 	}
@@ -47,11 +50,16 @@ func BenchmarkShardedMailbox_Throughput(b *testing.B) {
 		go func(consumerID int) {
 			defer wg.Done()
 			for i := 0; i < opsPerConsumer; i++ {
-				_ = q.Dequeue(uint64(consumerID))
+				_, err := q.Dequeue(uint64(consumerID))
+				if err != nil {
+					b.Error(err)
+				}
 			}
 		}(c)
 	}
 
 	// Ждем, пока все продюсеры и консюмеры не закончат работу.
 	wg.Wait()
+	q.Close()
+
 }

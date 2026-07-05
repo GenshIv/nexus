@@ -8,10 +8,11 @@ import (
 const cacheLineSize = 64
 
 type mailbox[T any] struct {
-	_     [cacheLineSize]byte
-	item  T
-	state atomic.Uint32 // 0 = empty, 1 = full
-	_     [cacheLineSize]byte
+	_       [cacheLineSize]byte
+	item    T
+	state   atomic.Uint32 // 0 = empty, 1 = full
+	isClose atomic.Bool
+	_       [cacheLineSize]byte
 }
 
 type ShardedMailbox[T any] struct {
@@ -19,60 +20,81 @@ type ShardedMailbox[T any] struct {
 	mask   uint64
 }
 
-func NewShardedMailbox[T any](numShards uint64) *ShardedMailbox[T] {
-	if numShards == 0 || (numShards&(numShards-1)) != 0 {
-		panic("numShards must be a power of 2")
-	}
-	mb := &ShardedMailbox[T]{
-		shards: make([]*mailbox[T], numShards),
-		mask:   numShards - 1,
-	}
-	for i := range mb.shards {
-		mb.shards[i] = &mailbox[T]{}
-	}
+func NewShardedMailbox[T any]() *ShardedMailbox[T] {
+	mb := new(ShardedMailbox[T])
+	mb.NewShards(uint64(runtime.GOMAXPROCS(0)))
 	return mb
 }
 
-func (mb *ShardedMailbox[T]) TrySend(shardID uint64, item T) bool {
+func (mb *ShardedMailbox[T]) NewShards(numShards uint64) {
+
+	mb.shards = make([]*mailbox[T], numShards)
+	mb.mask = numShards - 1
+
+	for i := range mb.shards {
+		mb.shards[i] = &mailbox[T]{}
+	}
+
+}
+
+func (mb *ShardedMailbox[T]) TrySend(shardID uint64, item T) (bool, error) {
 	shard := mb.shards[shardID&mb.mask]
+
+	if shard.isClose.Load() {
+		return false, nil
+	}
+
 	if shard.state.CompareAndSwap(0, 1) {
 		shard.item = item
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
-func (mb *ShardedMailbox[T]) TryReceive(shardID uint64) (T, bool) {
-	shard := mb.shards[shardID&mb.mask]
-	if shard.state.CompareAndSwap(1, 0) {
-		return shard.item, true
-	}
+func (mb *ShardedMailbox[T]) TryReceive(shardID uint64) (T, bool, error) {
 	var zero T
-	return zero, false
+	shard := mb.shards[shardID]
+
+	if shard.isClose.Load() {
+		return zero, false, nil
+	}
+
+	if shard.state.CompareAndSwap(1, 0) {
+		return shard.item, true, nil
+	}
+	return zero, false, nil
 }
 
-func (mb *ShardedMailbox[T]) Enqueue(producerID uint64, item T) {
+func (mb *ShardedMailbox[T]) Enqueue(producerID uint64, item T) error {
 	homeShardIndex := producerID & mb.mask
 	for {
 		// "Казино": ищем свободный слот, начиная с соседа.
 		for i := uint64(1); i <= uint64(len(mb.shards)); i++ {
-			if mb.TrySend((homeShardIndex+i)&mb.mask, item) {
-				return
+			if ok, err := mb.TrySend((homeShardIndex+i)&mb.mask, item); ok || err != nil {
+				return err
 			}
 		}
 		runtime.Gosched()
 	}
 }
 
-func (mb *ShardedMailbox[T]) Dequeue(consumerID uint64) T {
+func (mb *ShardedMailbox[T]) Dequeue(consumerID uint64) (T, error) {
 	homeShardIndex := consumerID & mb.mask
 	for {
 		// Симметричное "казино": ищем полный слот, начиная с соседа.
 		for i := uint64(1); i <= uint64(len(mb.shards)); i++ {
-			if item, ok := mb.TryReceive((homeShardIndex + i) & mb.mask); ok {
-				return item
+			if item, ok, err := mb.TryReceive((homeShardIndex + i) & mb.mask); ok {
+				return item, err
 			}
 		}
 		runtime.Gosched()
 	}
+}
+
+func (mb *ShardedMailbox[T]) Close() {
+	// Симметричное "казино": ищем полный слот, начиная с соседа.
+	for i := uint64(0); i < uint64(len(mb.shards)); i++ {
+		mb.shards[i].isClose.Store(true)
+	}
+	runtime.Gosched()
 }
