@@ -1,6 +1,7 @@
 package sharded
 
 import (
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -10,8 +11,8 @@ func BenchmarkStandardChannel_MPMC(b *testing.B) {
 	// channelCapacity := uint64(1024 * 4)
 	ch := make(chan int)
 
-	numProducers := 32
-	numConsumers := 32
+	numProducers := runtime.GOMAXPROCS(0)
+	numConsumers := numProducers
 
 	b.ResetTimer()
 	b.SetParallelism(numProducers)
