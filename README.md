@@ -21,6 +21,8 @@ The `ShardedMailbox` is not a traditional queue but a collection of single-eleme
 
 The core principle is **"producer locks and sends, consumer receives and unlocks."**
 
+> **Note**: The `ShardedMailbox` design favors throughput and resilience over strict FIFO (First-In, First-Out) ordering across different shards. While the order of messages sent by a single producer to a single consumer is generally preserved, no such guarantee is made for the global order of messages across all producers and consumers.
+
 ### How Sharding Works
 
 1.  The `ShardedMailbox` is initialized with `N` independent mailboxes (shards).
@@ -29,6 +31,19 @@ The core principle is **"producer locks and sends, consumer receives and unlocks
 4.  **Consumers (`Dequeue`)**: A consumer attempts to "unlock" and retrieve a message. It first checks its home shard for high cache affinity. If empty, it attempts to "steal" work from other shards. If all mailboxes are empty, it waits (blocks).
 
 This decentralized approach minimizes contention and allows for excellent scalability on multi-core systems.
+
+### Design Rationale: Self-Balancing Through Shard Locks
+
+A classic MPMC queue with a single ring buffer suffers from severe **contention** on highly parallel systems (32+ cores). All producers and consumers must atomically update the same `head` and `tail` counters, causing a "traffic jam" on the memory bus.
+
+The `ShardedMailbox` solves this by leveraging the Go runtime's scheduler for **self-balancing**.
+
+1.  **Internal Shard Locks**: Each shard is an independent mailbox with its own lock state ("empty" or "full"). This is the only point of contention.
+2.  **Go Scheduler**: The Go runtime independently distributes goroutines (producers and consumers) across available CPU cores. More powerful cores naturally execute more operations.
+3.  **Emergent Behavior**: Because our `Enqueue` and `Dequeue` operations are blocking, a goroutine on a fast core will quickly find a free/full shard, complete its operation, and move on to the next. A goroutine on a slower core will simply wait longer on its shard's lock. This creates a natural, emergent load-balancing effect: **more messages are processed on more performant cores** without any central coordinator.
+4.  **Guaranteed Delivery**: Once a producer or consumer "locks" a shard for its session, it does not release it until the operation is complete, guaranteeing message delivery without interference from other links in the chain.
+
+This approach trusts the Go runtime to handle thread scheduling while providing a fine-grained, decentralized locking mechanism that scales. Instead of trying to outsmart the platform, we use its inherent characteristics (like scheduler behavior and non-uniform core performance) to enhance competitiveness and ensure stable system scaling. We don't just calculate where it's best to run; we allow the system to self-tune and adapt. As a result, overhead is minimized, and performance gains a direct correlation with scaling.
 
 ## Performance
 
@@ -61,6 +76,39 @@ cpu: AMD EPYC 7763 64-Core Processor
 BenchmarkSPSCQueue_Separate-4    	238401357	         5.094 ns/op
 BenchmarkStdChannel_Separate-4   	23047090	        54.08 ns/op
 ```
+
+## Use Cases
+
+### 1. High-Frequency Trading (HFT) and Fintech
+This is the "native" environment for such structures.
+*   **Why**: In trading systems, every microsecond of latency in transmitting market quotes or order execution signals is critical.
+*   **Application**: Transferring signals between a UDP market data parsing stream and a business logic (strategy) stream. The `spsc` queue will work tens of times faster here than channels, removing latency "jitter."
+
+### 2. Real-time Game Event Processing
+*   **Application**: You have thousands of players performing actions (clicks, purchases, leveling up). You need to update the "world state" in real-time.
+*   **Why**: `ShardedMailbox` allows distributing the load across processing threads without deadlocks, ensuring player state is not corrupted by data access conflicts.
+
+### 3. Database and Storage Engines
+*   **Application**: Implementing Write-Ahead Log (WAL) or LSM-tree structures.
+*   **Why**: When data needs to be quickly flushed from memory to disk, the writing thread must not block threads that are reading data. Nexus acts as an ideally fast buffer between application code and disk I/O.
+
+### 4. Network Proxies and API Gateways
+*   **Application**: Transferring packets between a network reading thread and a processing thread (e.g., for filtering HTTP headers or TLS termination).
+*   **Why**: API gateways (like Envoy or custom Go solutions) handle tens of thousands of requests per second. At these speeds, standard channels become a bottleneck. This module allows building lock-free pipelines that can handle immense load on a single node.
+
+### 5. AI/ML Inference Pipelines
+*   **Application**: Transferring frames or tensors between a capture stream (e.g., from a camera or video stream) and a model inference stream (TensorRT/ONNX).
+*   **Why**: If the model runs fast but the data transport (queue) is slow, the GPU sits idle. The `spsc` queue is an ideal solution for feeding data to the model without CPU-side bottlenecks.
+
+### Summary: Where Nexus Wins
+Use Nexus wherever:
+*   **Latency is critical**: When 50-100 ns of channel latency is "too much."
+*   **Concurrency is high**: When you have 32, 64, or 128 cores, and standard mutexes start fighting for cache lines.
+*   **Predictability is needed**: You want to avoid GC "freezes" caused by extra allocations and runtime object creation.
+
+### When NOT to Use
+*   **Low-load applications**: For a web service with 10 requests per second, standard channels are a perfect choice because they are simpler to maintain.
+*   **Complex `select` logic**: Go channels are unique in their ability to wait for events from multiple sources. Nexus is a "fast pipe"; it has no selection logic, only direct data exchange.
 
 ## Usage
 
@@ -115,6 +163,11 @@ func main() {
 ```bash
 go get github.com/GenshIv/nexus
 ```
+
+## Future Directions
+
+*   **Continuous Benchmarking**: Setting up regular benchmark runs in GitHub Actions to ensure performance does not degrade with new Go versions or code changes.
+*   **Zero-Copy Potential**: For extreme performance scenarios, exploring the possibility of passing objects via `unsafe` pointers or using `sync.Pool` to reuse mailbox objects, completely eliminating GC overhead over long runs.
 
 ## Author
 Igor Ivanuto
