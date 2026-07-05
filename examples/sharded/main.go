@@ -9,48 +9,46 @@ import (
 )
 
 func main() {
-	numShards := uint64(2) // Must be a power of 2
-	shardCapacity := uint64(4)
-	q := sharded.NewShardedQueue[int](numShards, shardCapacity)
+	// Для лучшей производительности используйте количество шардов, равное GOMAXPROCS.
+	// Это позволяет каждому ядру работать со своим набором почтовых ящиков.
+	numShards := uint64(runtime.GOMAXPROCS(0))
+	if numShards < 1 {
+		numShards = 1
+	}
+	mailbox := sharded.NewShardedMailbox[int](numShards)
 
 	var wg sync.WaitGroup
-	wg.Add(2) // One for producer, one for consumer
+	// Мы запустим 10 пар "продюсер-консюмер" для демонстрации.
+	numPairs := 10
 
-	// Producer Goroutine
-	go func() {
-		defer wg.Done()
-		producerID := uint64(0) // Example producer ID
-		for i := 0; i < 10; i++ {
-			item := i + 100
-			// This call is non-blocking. It returns 'false' if all shards are full.
-			if !q.Enqueue(producerID, item) {
-				fmt.Printf("Sharded queue is full, dropping item: %d\n", item)
-				// In a real app, you might retry, use a backoff strategy, or drop the item.
-				runtime.Gosched() // Yield to consumer
-			} else {
-				fmt.Printf("Produced: %d\n", item)
-			}
-		}
-		q.Close() // Signal that no more items will be enqueued
-	}()
+	wg.Add(numPairs * 2)
 
-	// Consumer Goroutine
-	go func() {
-		defer wg.Done()
-		for {
-			// This call is non-blocking. It returns 'false' if the queue is empty.
-			if item, ok := q.Dequeue(); ok {
-				fmt.Printf("Consumed: %d\n", item)
-			} else if q.IsClosed() {
-				// If the queue is closed and we confirmed it's empty, we can exit.
-				break
-			} else {
-				// Queue is not closed but is temporarily empty. Yield to other goroutines.
-				runtime.Gosched()
-			}
-		}
-	}()
+	fmt.Printf("Launching %d producer-consumer pairs on %d shards...\n", numPairs, numShards)
 
-	wg.Wait() // Wait for both producer and consumer to finish
-	fmt.Println("Sharded MPMC Example Finished")
+	// Запускаем консюмеров
+	for i := 0; i < numPairs; i++ {
+		go func(consumerID int) {
+			defer wg.Done()
+			// Dequeue является блокирующей операцией.
+			// Она будет ждать, пока соответствующий продюсер не отправит данные.
+			item := mailbox.Dequeue(uint64(consumerID))
+			fmt.Printf("Consumer %d received: %d\n", consumerID, item)
+		}(i)
+	}
+
+	// Запускаем продюсеров
+	for i := 0; i < numPairs; i++ {
+		go func(producerID int) {
+			defer wg.Done()
+			item := 1000 + producerID
+			// Enqueue является блокирующей операцией.
+			// Она будет искать свободный ящик и ждать, если все заняты.
+			mailbox.Enqueue(uint64(producerID), item)
+			fmt.Printf("Producer %d sent: %d\n", producerID, item)
+		}(i)
+	}
+
+	// Ждем, пока все горутины не завершат свою работу.
+	wg.Wait()
+	fmt.Println("\nAll messages have been successfully exchanged.")
 }
