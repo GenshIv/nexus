@@ -184,10 +184,6 @@ func NewShardedQueue[T any](numShards, shardCapacity uint64) *ShardedQueue[T] {
 func (q *ShardedQueue[T]) Enqueue(producerID uint64, item T) bool {
 	homeShardIndex := producerID & q.mask
 
-	if q.shards[homeShardIndex].TryEnqueue(item) {
-		return true
-	}
-
 	for i := uint64(1); i < q.numShards; i++ {
 		shardIndex := (homeShardIndex + i) & q.mask
 		if q.shards[shardIndex].TryEnqueue(item) {

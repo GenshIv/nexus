@@ -27,6 +27,10 @@ func BenchmarkShardedQueue_MPMC(b *testing.B) {
 	for i := 0; i < numConsumers; i++ {
 		go func() {
 			defer consumerWg.Done()
+
+			//runtime.LockOSThread()
+			//defer runtime.UnlockOSThread()
+
 			for {
 				if _, ok := q.Dequeue(); !ok {
 					break
