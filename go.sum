@@ -1,0 +1,6 @@
+github.com/GenshIv/hft-ipc v1.2.4 h1:LCEizGWoYG64MybjgLc5OYq92bb5mKuZKHolPxfJ9Z4=
+github.com/GenshIv/hft-ipc v1.2.4/go.mod h1:RrCnFCjq7i/GX6mWvequydCYqXGd9zRtFjNKWTuWW8M=
+github.com/edsrzf/mmap-go v1.2.0 h1:hXLYlkbaPzt1SaQk+anYwKSRNhufIDCchSPkUD6dD84=
+github.com/edsrzf/mmap-go v1.2.0/go.mod h1:19H/e8pUPLicwkyNgOykDXkJ9F0MHE+Z52B8EIth78Q=
+golang.org/x/sys v0.0.0-20211216021012-1d35b9e2eb4e h1:fLOSk5Q00efkSvAm+4xcoXD+RRmLmmulPn5I3Y9F2EM=
+golang.org/x/sys v0.0.0-20211216021012-1d35b9e2eb4e/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
